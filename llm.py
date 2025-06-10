@@ -40,7 +40,8 @@ def get_retrievalQA():
     database = get_database()
 
     ## 프롬프트 가져오기
-    prompt = hub.pull('rlm/rag-prompt', api_key=LANCHAIN_API_KEY)
+    # prompt = hub.pull('rlm/rag-prompt', api_key=LANCHAIN_API_KEY)
+    prompt = hub.pull('rlx/rag-prompt', api_key=LANCHAIN_API_KEY)
 
     ## LLM 모델 지정
     llm  = get_llm()
