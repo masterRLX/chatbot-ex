@@ -1,9 +1,12 @@
 import os
 
 from dotenv import load_dotenv
-from langchain import hub
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
+from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
@@ -32,6 +35,14 @@ def get_database(index_name = 'laws'):
     )
 
 
+### Statefully manage chat history ===============================
+store = {}
+
+def get_session_history(session_id: str) -> BaseChatMessageHistory:
+    if session_id not in store:
+        store[session_id] = ChatMessageHistory()
+    return store[session_id]
+
 ## retrievalQA 함수 정의 
 def get_retrievalQA():
     LANCHAIN_API_KEY = os.getenv('LANGCHAIN_API_KEY')
@@ -39,31 +50,70 @@ def get_retrievalQA():
     ##vector store에서 index 정보
     database = get_database()
 
-    ## 프롬프트 가져오기
-    # prompt = hub.pull('rlm/rag-prompt', api_key=LANCHAIN_API_KEY)
-    prompt = hub.pull('rlx/rag-prompt', api_key=LANCHAIN_API_KEY)
+    ### Answer question ###
+    system_prompt = (
+        '''[identity]
+
+-당신은 전세 사기 피해 법률 전문가 입니다.
+-[context]를 참고하여 사용자의 질문에 답변하세요.
+-답변은 출처에 해당하는 ('어떤법'의 '몇조', '몇호', '몇항'의 출처) 형식으로 정확한 출처를 문단 마지막에 표시해주세요.
+-항목별로 표시해서 답변해주세요.
+-전세 사기 피해 법률 이외에는 '전세 사기 피해와 관련된 질문을 해주세요.'로 답하세요.
+[context] 
+
+{context} 
+'''
+    "\n\n"
+    "{context}"
+    )
+    
+    qa_prompt = ChatPromptTemplate.from_messages(
+        [
+        ("system", system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+        ]
+    )
+
 
     ## LLM 모델 지정
     llm  = get_llm()
 
     def format_docs(docs):
         return '\n\n'.join(doc.page_content for doc in docs)
+    
+    input_str = RunnableLambda(lambda x: x['input'])                            
 
     qa_chain = (
-        {'context': database.as_retriever() | format_docs,
-        'question': RunnablePassthrough(),
+        {'context': input_str | database.as_retriever() | format_docs,
+        'input': input_str,
+        'chat_history': RunnableLambda(lambda x: x['chat_history'])
         }
-        | prompt
+        | qa_prompt
         | llm
         | StrOutputParser()
     )
+    conversational_rag_chain = RunnableWithMessageHistory(
+        qa_chain,
+        get_session_history,
+        input_messages_key="input",
+        history_messages_key="chat_history",
+    )
+    return conversational_rag_chain
 
-    return qa_chain
 
 ## [AI Message 함수 정의] ######################
-def get_ai_message(user_message):
+def get_ai_message(user_message, session_id='default'):
     qa_chain = get_retrievalQA()
-    ai_message = qa_chain.invoke(user_message)
+
+    ai_message = qa_chain.invoke(
+        {"input" : user_message},
+        config={"configurable": {"session_id": session_id}},
+    )
+
+    # print(f'대화이력 -> , {get_session_history(session_id)}\n\n')
+    # print('=' * 50 + '\n')
     
     return ai_message
+
 
