@@ -10,6 +10,9 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
+from langchain.chains import create_history_aware_retriever, create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+
 
 ##환경변수 읽어오기 ======================================
 load_dotenv()
@@ -31,7 +34,7 @@ def get_database(index_name = 'laws'):
     #저장된 인덱스 가져오기
     return PineconeVectorStore.from_existing_index(
         index_name=index_name,
-        embedding=embedding
+        embedding=embedding,
     )
 
 
@@ -47,8 +50,35 @@ def get_session_history(session_id: str) -> BaseChatMessageHistory:
 def get_retrievalQA():
     LANCHAIN_API_KEY = os.getenv('LANGCHAIN_API_KEY')
 
+    ## LLM 모델 지정
+    llm  = get_llm()
+
     ##vector store에서 index 정보
     database = get_database()
+    retriever = database.as_retriever(search_kwargs={'k': 2})
+
+    ## 코드추가 ######################################################
+    from langchain.chains import create_history_aware_retriever
+    from langchain_core.prompts import MessagesPlaceholder
+
+    contextualize_q_system_prompt = (
+        "채팅 기록과 최신 사용자 질문을 고려하여"
+        "채팅 기록의 맥락을 참조할 수 있습니다."
+        "이해할 수 있는 독립적인 질문을 작성하십시오."
+        "채팅 기록 없이도 가능합니다. 질문에 답변하지 마십시오."
+        "필요한 경우 질문을 재구성하고, 그렇지 않은 경우 그대로 반환하십시오."
+    )
+
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+    history_aware_retriever = create_history_aware_retriever(
+        llm, retriever, contextualize_q_prompt
+    )
 
     ### Answer question ###
     system_prompt = (
@@ -76,29 +106,21 @@ def get_retrievalQA():
     )
 
 
-    ## LLM 모델 지정
-    llm  = get_llm()
 
-    def format_docs(docs):
-        return '\n\n'.join(doc.page_content for doc in docs)
+    from langchain.chains import create_retrieval_chain
+    from langchain.chains.combine_documents import create_stuff_documents_chain
+    qa_chain = create_stuff_documents_chain(llm, qa_prompt)
+    rag_chain = create_retrieval_chain(history_aware_retriever, qa_chain)
+
+    # mapped_rag_chain = rag_chain | (lambda x: {"output": x["answer"]})
     
-    input_str = RunnableLambda(lambda x: x['input'])                            
-
-    qa_chain = (
-        {'context': input_str | database.as_retriever() | format_docs,
-        'input': input_str,
-        'chat_history': RunnableLambda(lambda x: x['chat_history'])
-        }
-        | qa_prompt
-        | llm
-        | StrOutputParser()
-    )
     conversational_rag_chain = RunnableWithMessageHistory(
-        qa_chain,
+        rag_chain,
         get_session_history,
         input_messages_key="input",
         history_messages_key="chat_history",
-    )
+        output_messages_key="answer",
+    ).pick('answer')
     return conversational_rag_chain
 
 
@@ -106,14 +128,13 @@ def get_retrievalQA():
 def get_ai_message(user_message, session_id='default'):
     qa_chain = get_retrievalQA()
 
-    ai_message = qa_chain.invoke(
+    ai_message = qa_chain.stream(
         {"input" : user_message},
         config={"configurable": {"session_id": session_id}},
     )
 
-    # print(f'대화이력 -> , {get_session_history(session_id)}\n\n')
-    # print('=' * 50 + '\n')
+    print(f'대화이력 -> , {get_session_history(session_id)}\n\n')
+    print('=' * 50 + '\n')
     
     return ai_message
-
 
