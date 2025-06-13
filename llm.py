@@ -1,4 +1,5 @@
 import os
+import langchain
 
 from dotenv import load_dotenv
 from langchain.chains import (create_history_aware_retriever,
@@ -78,19 +79,38 @@ def get_qa_prompt() :
 -답변은 출처에 해당하는 ('어떤법'의 '몇조', '몇호', '몇항'의 출처) 형식으로 정확한 출처를 문단 마지막에 표시해주세요.
 -항목별로 표시해서 답변해주세요.
 -전세 사기 피해 법률 이외에는 '전세 사기 피해와 관련된 질문을 해주세요.'로 답하세요.
-[context] 
 
+[context] 
 {context} 
 '''
     "\n\n"
     "{context}"
     )
     
+    ## few-shot #################################################
+    from langchain_core.prompts import PromptTemplate
+    from langchain_core.prompts import FewShotPromptTemplate
+    from config import answer_examples
+
+    example_prompt = PromptTemplate.from_template("Question: {input}\n\nAnswer: {answer}") # 단일
+
+    few_shot_prompt = FewShotPromptTemplate(
+        examples=answer_examples, ## 질문/답변 예시들 (전체 type은 list, 각 질문/답변 type은 dict)
+        example_prompt=example_prompt, ## 단일 예시 포맷
+        prefix='다음 질문에 답변하세요 : ', ## 예시들 위로 추가되는 텍스트
+        suffix="Question: {input}",         ## 예시들 뒤로 추가되는 텍스트
+        input_variables=["input"],
+    )
+
+    formmated_few_shot_prompt = few_shot_prompt.format(input='{input}')
+
+    ############################################################
     qa_prompt = ChatPromptTemplate.from_messages(
         [
-        ("system", system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
+            ("system", system_prompt),
+            ('assistant', 'formmated_few_shot_prompt'),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
         ]
     )
     return qa_prompt

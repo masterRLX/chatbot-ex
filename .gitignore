@@ -1,6 +1,6 @@
 ## 파일
 .env
-
+*.pycgia
 ## 폴더
 __pycache__/
 secret/
