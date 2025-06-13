@@ -135,6 +135,6 @@ def stream_ai_message(user_message, session_id='default'):
 
     print(f'대화이력 -> , {get_session_history(session_id)}\n\n')
     print('=' * 50 + '\n')
-    
+    print(f'[stream_ai_message 함수 내 출력] session_id>> {session_id}')
     return ai_message
 
